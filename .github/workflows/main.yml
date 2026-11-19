@@ -48,12 +48,10 @@ jobs:
         env:
           ENVIRONMENT: production
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          AI_API_KEY: ${{ secrets.AI_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
           CLOUD_API_KEY: ${{ secrets.CLOUD_API_KEY }}
-          AI_BASE_URL: ${{ vars.AI_BASE_URL }}
-          AI_MODEL: ${{ vars.AI_MODEL }}
+          AI_BASE_URL: ${{ vars.AI_BASE_URL  
 
         run: |
           set -Eeuo pipefail
