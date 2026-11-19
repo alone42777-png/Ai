@@ -34,18 +34,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Validate Python Files
-        run: python -m compileall -q .
-
-      - name: Check Required Files
+      - name: Validate Project
         run: |
-          test -f main.py
+          python -m compileall -q app telegram_bot.py
+          test -f app/__init__.py
+          test -f app/main.py
+          test -f app/config.py
           test -f telegram_bot.py
-          test -f requirements.txt
+          echo "Project validation successful"
 
       - name: Start ALONE CLOUD
         shell: bash
         env:
+          ENVIRONMENT: production
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           AI_API_KEY: ${{ secrets.AI_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -57,18 +58,6 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          API_PID=""
-          BOT_PID=""
-
-          cleanup() {
-            echo "Stopping ALONE CLOUD..."
-
-            [[ -z "$BOT_PID" ]] || kill "$BOT_PID" 2>/dev/null || true
-            [[ -z "$API_PID" ]] || kill "$API_PID" 2>/dev/null || true
-          }
-
-          trap cleanup EXIT
-
           for name in DATABASE_URL AI_API_KEY TELEGRAM_BOT_TOKEN ADMIN_API_KEY CLOUD_API_KEY; do
             if [[ -z "${!name:-}" ]]; then
               echo "::error::Missing Secret: $name"
@@ -79,16 +68,33 @@ jobs:
           export AI_BASE_URL="${AI_BASE_URL:-https://api.openai.com/v1}"
           export AI_MODEL="${AI_MODEL:-gpt-4o-mini}"
 
-          echo "Checking application..."
+          API_PID=""
+          BOT_PID=""
 
-          python -c "from main import app; print('FastAPI import successful')"
+          cleanup() {
+            echo "Stopping ALONE CLOUD..."
 
-          echo "Starting FastAPI..."
+            if [[ -n "$BOT_PID" ]]; then
+              kill "$BOT_PID" 2>/dev/null || true
+            fi
 
-          python -m uvicorn main:app \
+            if [[ -n "$API_PID" ]]; then
+              kill "$API_PID" 2>/dev/null || true
+            fi
+          }
+
+          trap cleanup EXIT
+
+          echo "Checking Python imports..."
+
+          python -c "from app.main import app; print('FastAPI import OK')"
+
+          echo "Starting API..."
+
+          python -m uvicorn app.main:app \
             --host 127.0.0.1 \
             --port 8000 \
-            --log-level debug > uvicorn.log 2>&1 &
+            --log-level info > uvicorn.log 2>&1 &
 
           API_PID=$!
 
@@ -126,13 +132,13 @@ jobs:
 
           while true; do
             if ! kill -0 "$API_PID" 2>/dev/null; then
-              echo "::error::API stopped unexpectedly"
+              echo "::error::API stopped"
               cat uvicorn.log
               exit 1
             fi
 
             if ! kill -0 "$BOT_PID" 2>/dev/null; then
-              echo "::error::Telegram Bot stopped unexpectedly"
+              echo "::error::Telegram Bot stopped"
               exit 1
             fi
 
