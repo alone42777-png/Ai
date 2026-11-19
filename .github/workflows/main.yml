@@ -1,0 +1,97 @@
+
+name: ALONE CLOUD
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alone-cloud-runner
+  cancel-in-progress: true
+
+jobs:
+  run-cloud:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
+
+      - name: Validate Python Files
+        run: python -m compileall -q app telegram_bot.py
+
+      - name: Start ALONE CLOUD
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
+          CLOUD_API_KEY: ${{ secrets.CLOUD_API_KEY }}
+          AI_BASE_URL: ${{ vars.AI_BASE_URL }}
+          AI_MODEL: ${{ vars.AI_MODEL }}
+
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for name in DATABASE_URL AI_API_KEY TELEGRAM_BOT_TOKEN ADMIN_API_KEY CLOUD_API_KEY; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::Missing Secret: $name"
+              exit 1
+            fi
+          done
+
+          export AI_BASE_URL="${AI_BASE_URL:-https://api.openai.com/v1}"
+          export AI_MODEL="${AI_MODEL:-gpt-4o-mini}"
+
+          uvicorn app.main:app \
+            --host 127.0.0.1 \
+            --port 8000 &
+
+          API_PID=$!
+
+          cleanup() {
+            kill "$API_PID" 2>/dev/null || true
+          }
+
+          trap cleanup EXIT
+
+          for i in {1..30}; do
+            if curl --silent --fail http://127.0.0.1:8000/health; then
+              echo "ALONE CLOUD API READY"
+              break
+            fi
+
+            if ! kill -0 "$API_PID" 2>/dev/null; then
+              echo "::error::API stopped"
+              exit 1
+            fi
+
+            sleep 2
+          done
+
+          curl --silent --fail http://127.0.0.1:8000/health
+
+          echo "Starting Telegram Bot..."
+
+          python telegram_bot.py &
+          BOT_PID=$!
+
+          echo "ALONE CLOUD IS RUNNING"
+
+          wait "$BOT_PID"
