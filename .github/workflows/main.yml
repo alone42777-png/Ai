@@ -35,16 +35,13 @@ jobs:
           pip install -r requirements.txt
 
       - name: Validate Python Files
-        run: |
-          python -m compileall -q .
-          echo "Python validation successful"
+        run: python -m compileall -q .
 
       - name: Check Required Files
         run: |
           test -f main.py
           test -f telegram_bot.py
           test -f requirements.txt
-          echo "All required files found"
 
       - name: Start ALONE CLOUD
         shell: bash
@@ -58,9 +55,19 @@ jobs:
           AI_MODEL: ${{ vars.AI_MODEL }}
 
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
 
-          echo "Starting ALONE CLOUD..."
+          API_PID=""
+          BOT_PID=""
+
+          cleanup() {
+            echo "Stopping ALONE CLOUD..."
+
+            [[ -z "$BOT_PID" ]] || kill "$BOT_PID" 2>/dev/null || true
+            [[ -z "$API_PID" ]] || kill "$API_PID" 2>/dev/null || true
+          }
+
+          trap cleanup EXIT
 
           for name in DATABASE_URL AI_API_KEY TELEGRAM_BOT_TOKEN ADMIN_API_KEY CLOUD_API_KEY; do
             if [[ -z "${!name:-}" ]]; then
@@ -72,45 +79,30 @@ jobs:
           export AI_BASE_URL="${AI_BASE_URL:-https://api.openai.com/v1}"
           export AI_MODEL="${AI_MODEL:-gpt-4o-mini}"
 
-          API_PID=""
-          BOT_PID=""
+          echo "Checking application..."
 
-          cleanup() {
-            echo "Stopping ALONE CLOUD..."
-
-            if [[ -n "$BOT_PID" ]]; then
-              kill "$BOT_PID" 2>/dev/null || true
-            fi
-
-            if [[ -n "$API_PID" ]]; then
-              kill "$API_PID" 2>/dev/null || true
-            fi
-          }
-
-          trap cleanup EXIT
+          python -c "from main import app; print('FastAPI import successful')"
 
           echo "Starting FastAPI..."
 
           python -m uvicorn main:app \
             --host 127.0.0.1 \
-            --port 8000 &
-          
-          API_PID=$!
+            --port 8000 \
+            --log-level debug > uvicorn.log 2>&1 &
 
-          echo "Waiting for API..."
+          API_PID=$!
 
           API_READY=false
 
           for i in {1..30}; do
-            if curl --silent --fail http://127.0.0.1:8000/health; then
+            if curl -fsS http://127.0.0.1:8000/health; then
               API_READY=true
-              echo ""
-              echo "ALONE CLOUD API READY"
               break
             fi
 
             if ! kill -0 "$API_PID" 2>/dev/null; then
               echo "::error::API process stopped"
+              cat uvicorn.log
               exit 1
             fi
 
@@ -119,8 +111,11 @@ jobs:
 
           if [[ "$API_READY" != "true" ]]; then
             echo "::error::API health check failed"
+            cat uvicorn.log
             exit 1
           fi
+
+          echo "ALONE CLOUD API READY"
 
           echo "Starting Telegram Bot..."
 
@@ -129,4 +124,17 @@ jobs:
 
           echo "ALONE CLOUD IS RUNNING"
 
-          wait "$BOT_PID"
+          while true; do
+            if ! kill -0 "$API_PID" 2>/dev/null; then
+              echo "::error::API stopped unexpectedly"
+              cat uvicorn.log
+              exit 1
+            fi
+
+            if ! kill -0 "$BOT_PID" 2>/dev/null; then
+              echo "::error::Telegram Bot stopped unexpectedly"
+              exit 1
+            fi
+
+            sleep 10
+          done
